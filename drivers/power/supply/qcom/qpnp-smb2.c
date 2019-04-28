@@ -31,9 +31,7 @@
 #ifdef CONFIG_MACH_ASUS_X00T
 #include <linux/of_gpio.h>
 #include <linux/wakelock.h>
-#include <linux/uaccess.h>
-#include <linux/proc_fs.h>
-#include <asm-generic/errno-base.h>
+//#include <asm-generic/errno-base.h>
 #include <linux/qpnp/qpnp-adc.h>
 #endif
 
@@ -972,9 +970,6 @@ static enum power_supply_property smb2_batt_props[] = {
 	POWER_SUPPLY_PROP_FCC_STEPPER_ENABLE,
 	POWER_SUPPLY_PROP_CHARGE_FULL,
 	POWER_SUPPLY_PROP_CYCLE_COUNT,
-#ifdef CONFIG_MACH_ASUS_X00T
-	POWER_SUPPLY_PROP_CHARGING_ENABLED,
-#endif
 };
 
 static int smb2_batt_get_prop(struct power_supply *psy,
@@ -998,11 +993,6 @@ static int smb2_batt_get_prop(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_INPUT_SUSPEND:
 		rc = smblib_get_prop_input_suspend(chg, val);
 		break;
-#ifdef CONFIG_MACH_ASUS_X00T
-	case POWER_SUPPLY_PROP_CHARGING_ENABLED:
-		rc = smblib_get_prop_charging_enabled(chg, val);
-		break;
-#endif
 	case POWER_SUPPLY_PROP_CHARGE_TYPE:
 		rc = smblib_get_prop_batt_charge_type(chg, val);
 		break;
@@ -1111,11 +1101,6 @@ static int smb2_batt_set_prop(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_INPUT_SUSPEND:
 		rc = smblib_set_prop_input_suspend(chg, val);
 		break;
-#ifdef CONFIG_MACH_ASUS_X00T
-	case POWER_SUPPLY_PROP_CHARGING_ENABLED:
-		rc = smblib_set_prop_charging_enabled(chg, val);
-		break;
-#endif
 	case POWER_SUPPLY_PROP_SYSTEM_TEMP_LEVEL:
 		rc = smblib_set_prop_system_temp_level(chg, val);
 		break;
@@ -2282,242 +2267,6 @@ static void smb2_create_debugfs(struct smb2 *chip)
 
 #endif
 
-#ifdef CONFIG_MACH_ASUS_X00T
-#define ATD_CHG_LIMIT_SOC	70
-int charger_limit_enable_flag;
-int charger_limit_value;
-static char charger_limit[8] = "0";
-static struct proc_dir_entry *limit_enable_entry;
-static struct proc_dir_entry *limit_entry;
-extern int asus_get_prop_batt_capacity(struct smb_charger *chg);
-#define CHARGER_LIMIT_EN_PROC_FILE	"driver/charger_limit_enable"
-#define CHARGER_LIMIT_PROC_FILE		"driver/charger_limit"
-
-ssize_t charger_limit_enable_read_proc(struct file *file, char __user *page,
-					size_t size, loff_t *ppos)
-{
-	char read_data[8] = {0};
-	int len = 0;
-	int rc;
-
-	/* CMD call again */
-	if (*ppos)
-		return 0;
-
-	len = sprintf(read_data, "%d\n", charger_limit_enable_flag);
-	pr_debug("%s, len = %d, data = %s\n", __func__, len, read_data);
-
-	rc = copy_to_user(page, read_data, len);
-	if (rc < 0)
-		return -EFAULT;
-
-	*ppos += len;
-
-	return len;
-}
-
-static ssize_t charger_limit_enable_write_proc(struct file *file,
-						const char __user *buff,
-						size_t size, loff_t *ppos)
-{
-	char write_data[32] = {0};
-	int rc;
-	int soc;
-	bool do_it, online;
-	union power_supply_propval pval = {0, };
-
-	smblib_get_prop_usb_online(smbchg_dev, &pval);
-	online = pval.intval;
-
-	if (size >= 32)
-		return -EFAULT;
-
-	if (copy_from_user(&write_data, buff, size))
-		return -EFAULT;
-
-	if (write_data[0] == '1') {
-		charger_limit_enable_flag = 1;
-		soc = asus_get_prop_batt_capacity(smbchg_dev);
-
-		do_it = charger_limit_value < soc;
-		if (do_it) {
-			rc = smblib_masked_write(smbchg_dev,
-						CHARGING_ENABLE_CMD_REG,
-						CHARGING_ENABLE_CMD_BIT, 1);
-			if (online)
-				power_supply_changed(smbchg_dev->batt_psy);
-		}
-
-		pr_debug("%s, write enable 1 soc = %d, limit-value= %d!\n",
-				__func__, soc, charger_limit_value);
-	} else {
-		charger_limit_enable_flag = 0;
-
-		rc = smblib_masked_write(smbchg_dev,
-					CHARGING_ENABLE_CMD_REG,
-					CHARGING_ENABLE_CMD_BIT, 0);
-		if (online)
-			power_supply_changed(smbchg_dev->batt_psy);
-
-		pr_debug("%s, write enable 0, no limit, charging !!\n",
-				__func__);
-	}
-
-	pr_debug("%s, charger_limit_enable_flag = %d\n", __func__,
-			charger_limit_enable_flag);
-
-	return size;
-}
-
-static const struct file_operations charger_limit_enable_proc_ops = {
-	.read = charger_limit_enable_read_proc,
-	.write = charger_limit_enable_write_proc,
-};
-
-ssize_t charger_limit_read_proc(struct file *file, char __user *page,
-				size_t size, loff_t *ppos)
-{
-	char read_data[8] = {0};
-	int len = 0;
-	int rc;
-
-	/* CMD call again */
-	if (*ppos)
-		return 0;
-
-	len = sprintf(read_data, "%d\n", charger_limit_value);
-	pr_debug("%s, len = %d, data = %s\n", __func__, len, read_data);
-
-	rc = copy_to_user(page, read_data, len);
-	if (rc < 0)
-		return -EFAULT;
-
-	*ppos += len;
-
-	return len;
-}
-
-static ssize_t charger_limit_write_proc(struct file *file,
-					const char __user *buff, size_t size,
-					loff_t *ppos)
-{
-	char write_data[8] = {0};
-	int soc;
-	bool do_it, online;
-	union power_supply_propval pval = {0, };
-
-	smblib_get_prop_usb_online(smbchg_dev, &pval);
-	online = pval.intval;
-
-	if (size >= 32)
-		return -EFAULT;
-
-	if (copy_from_user(&write_data, buff, size))
-		return -EFAULT;
-
-	if (write_data[0] == '0')
-		memset(charger_limit, 0, 8);
-	else
-		memcpy(charger_limit, write_data, 8);
-
-	charger_limit_value = (int)simple_strtol(charger_limit, NULL, 10);
-	soc = asus_get_prop_batt_capacity(smbchg_dev);
-
-	if (charger_limit_value > 100 || charger_limit_value < 0)
-		charger_limit_value = ATD_CHG_LIMIT_SOC;
-
-	charger_limit_enable_flag = !!charger_limit_value;
-	if (!charger_limit_enable_flag) {
-		smblib_masked_write(smbchg_dev, CHARGING_ENABLE_CMD_REG,
-					CHARGING_ENABLE_CMD_BIT, 0);
-		if (online)
-			power_supply_changed(smbchg_dev->batt_psy);
-	} else {
-		do_it = charger_limit_value < soc;
-		if (do_it) {
-			smblib_masked_write(smbchg_dev,
-						CHARGING_ENABLE_CMD_REG,
-						CHARGING_ENABLE_CMD_BIT, 1);
-			if (online)
-				power_supply_changed(smbchg_dev->batt_psy);
-		}
-	}
-
-	pr_debug("%s, limit-value= %d, current-soc = %d\n", __func__,
-			charger_limit_value, soc);
-	pr_debug("%s, limit-flag= %d\n", __func__, charger_limit_enable_flag);
-
-	return size;
-}
-
-static const struct file_operations charger_limit_proc_ops = {
-	.read = charger_limit_read_proc,
-	.write = charger_limit_write_proc,
-};
-
-static int init_proc_charger_limit(void)
-{
-	int ret;
-
-	limit_enable_entry = proc_create(CHARGER_LIMIT_EN_PROC_FILE, 0666,
-					NULL, &charger_limit_enable_proc_ops);
-	if (limit_enable_entry != NULL) {
-		pr_debug("create proc entry %s success",
-				CHARGER_LIMIT_EN_PROC_FILE);
-		ret = 0;
-	} else {
-		pr_err("create_proc entry %s failed\n",
-			CHARGER_LIMIT_EN_PROC_FILE);
-		return -ENOMEM;
-	}
-
-	limit_entry = proc_create(CHARGER_LIMIT_PROC_FILE, 0666, NULL,
-					&charger_limit_proc_ops);
-	if (limit_entry != NULL) {
-		pr_debug("create proc entry %s success",
-				CHARGER_LIMIT_PROC_FILE);
-		ret = 0;
-	} else {
-		pr_err("create_proc entry %s failed\n",
-			CHARGER_LIMIT_PROC_FILE);
-		return -ENOMEM;
-	}
-
-	return ret;
-}
-
-static void remove_proc_charger_limit(void)
-{
-	proc_remove(limit_enable_entry);
-	proc_remove(limit_entry);
-}
-
-int32_t get_ID_vadc_voltage(void)
-{
-	struct qpnp_vadc_chip *vadc_dev;
-	struct qpnp_vadc_result adc_result;
-	int32_t adc;
-
-	vadc_dev = qpnp_get_vadc(smbchg_dev->dev, "pm-gpio3");
-	if (IS_ERR(vadc_dev)) {
-		pr_err("%s: qpnp_get_vadc failed\n", __func__);
-		return PTR_ERR(vadc_dev);
-	}
-
-	/* Read the GPIO2 VADC channel with 1:1 scaling */
-	qpnp_vadc_read(vadc_dev, VADC_AMUX2_GPIO, &adc_result);
-	adc = (int) adc_result.physical;
-
-	/* uV to mV */
-	adc = adc / 1000;
-
-	pr_debug("%s: adc=%d adc_result.physical=%lld adc_result.chan=0x%x\n",
-			__func__, adc, adc_result.physical, adc_result.chan);
-
-	return adc;
-}
-#endif /* CONFIG_MACH_ASUS_X00T */
-
 static int smb2_probe(struct platform_device *pdev)
 {
 	struct smb2 *chip;
@@ -2705,10 +2454,6 @@ static int smb2_probe(struct platform_device *pdev)
 		goto cleanup;
 	}
 
-#ifdef CONFIG_MACH_ASUS_X00T
-	init_proc_charger_limit();
-#endif
-
 	smb2_create_debugfs(chip);
 
 	rc = smblib_get_prop_usb_present(chg, &val);
@@ -2784,9 +2529,6 @@ cleanup:
 	smblib_deinit(chg);
 
 	platform_set_drvdata(pdev, NULL);
-#ifdef CONFIG_MACH_ASUS_X00T
-	remove_proc_charger_limit();
-#endif
 	return rc;
 }
 
